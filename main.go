@@ -2,35 +2,60 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/hajimehoshi/ebiten"
+	"github.com/hajimehoshi/ebiten/ebitenutil"
 	"github.com/hajimehoshi/ebiten/examples/resources/images"
 	"image"
+	"image/color"
+	_ "image/color"
 	_ "image/png"
 	"log"
 	"math"
+	"math/rand"
+	"strconv"
 	"time"
 )
 
+/*
+GLOBAL CONSTANTS -------------------------------------------------------------------------------------------------------
+*/
 const (
-	screenWidth  = 320
-	screenHeight = 240
-
-	frameOX                = 0
-	frameOY                = 32
-	frameWidth             = 32
-	frameHeight            = 32
-	frameNum               = 8
-	gravityConstant        = 0.14
-	horizontalAcceleration = 0.1
-	maxSpeed               = 2
-	maxDashDistance        = 80
+	screenWidth         = 320
+	screenHeight        = 240
+	frameOX             = 0              //offset x
+	frameOY             = 32             //offset y
+	frameWidth          = 32             //width of char frame
+	frameHeight         = 32             //height of char frame
+	frameNum            = 8              //number of frames in animation cycle
+	tileSize            = 32             // size wxh in px
+	tileRows            = 16             // number of rows of tiles
+	tileCols            = 16             // number of columns of tiles
+	maxDashDistance     = 1.1 * tileSize //max dash distance in tiles
+	frictionCoefficient = 0.25           // reduce speed by this parameter every game-tick
+	maxSpeed            = 2.35           // max movement speed
+	dashDelay           = 550            // dash delay in ms
 )
 
+/*
+GLOBAL VARIABLES -------------------------------------------------------------------------------------------------------
+*/
 var (
 	characterImage *ebiten.Image
 	groundImage    *ebiten.Image
+	tileImage      *ebiten.Image
+	tileColors     = [...]color.RGBA{
+		{0x49, 0x63, 0x8c, 0xff},
+		{0x5d, 0x74, 0x99, 0xff},
+		{0x2b, 0x42, 0x66, 0xff},
+		{0x42, 0x5a, 0x80, 0xff},
+	}
+	playground [tileRows][tileCols]int
 )
 
+/*
+TYPES ------------------------------------------------------------------------------------------------------------------
+*/
 type Game struct {
 	frameCount int
 	character  Character
@@ -43,13 +68,11 @@ type Camera struct {
 }
 
 type Character struct {
-	x          float64
-	y          float64
-	vSpeed     float64
-	hSpeed     float64
-	vCollision bool
-	dashing    bool
-	hCollision bool
+	x       float64
+	y       float64
+	vSpeed  float64
+	hSpeed  float64
+	dashing bool
 }
 
 type Vector struct {
@@ -59,10 +82,44 @@ type Vector struct {
 	y2 float64
 }
 
+/**
+SETUP AND DRIVER FUNCTIONS ---------------------------------------------------------------------------------------------
+*/
+
+func main() {
+	setupPlayground()
+	g := setupGame()
+
+	ebiten.SetWindowSize(4*screenWidth, 4*screenHeight)
+	ebiten.SetWindowTitle("Fun time")
+	if err := ebiten.RunGame(g); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func setupGame() *Game {
+	runnerImg, _, err := image.Decode(bytes.NewReader(images.Runner_png))
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	characterImage = ebiten.NewImageFromImage(runnerImg)
+	groundImage = ebiten.NewImage(tileSize*tileRows, tileSize*tileCols)
+	tileImage = ebiten.NewImage(tileSize, tileSize)
+
+	return &Game{}
+}
+
+func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	return screenWidth, screenHeight
+}
+
+/*
+LOGICAL GAME LOOP ------------------------------------------------------------------------------------------------------
+*/
 func (g *Game) Update() error {
 	g.frameCount++
-
-	friction(g)
+	fmt.Println(g.character.hSpeed, g.character.vSpeed)
 
 	if ebiten.IsKeyPressed(ebiten.KeyA) {
 		moveLeft(g)
@@ -83,73 +140,159 @@ func (g *Game) Update() error {
 		attack(g)
 	}
 
-	g.camera.x += g.character.hSpeed
-	g.camera.y += g.character.vSpeed
+	g.updateCharacterPosition()
+	g.reduceSpeedForFriction()
+	g.updateCameraPosition()
 
 	return nil
 }
 
-func friction(g *Game) {
-	g.character.hSpeed -= 0.1
-	g.character.vSpeed -= 0.1
-	if g.character.hSpeed < 0 {
-		g.character.hSpeed = 0
-	}
-	if g.character.vSpeed < 0 {
-		g.character.vSpeed = 0
-	}
+/*
+CHARACTER ACTIONS FUNCTIONS --------------------------------------------------------------------------------------------
+*/
+func moveLeft(g *Game) {
+	g.character.hSpeed -= 1
+	correctTooLowSpeed(g)
+}
+
+func moveRight(g *Game) {
+	g.character.hSpeed += 1
+	correctTooHighSpeed(g)
+}
+
+func moveDown(g *Game) {
+	g.character.vSpeed += 1
+	correctTooHighSpeed(g)
+}
+
+func moveUp(g *Game) {
+	g.character.vSpeed -= 1
+	correctTooLowSpeed(g)
 }
 
 func dash(g *Game) {
 	g.character.dashing = true
 
+	var x1, y1 = screenWidth / 2, screenHeight / 2
 	var x2, y2 = ebiten.CursorPosition()
-	var x1, y1 = g.camera.x, g.camera.y
-	var vector = Vector{x1, float64(x2), y1, float64(y2)}
-	var length = math.Sqrt(
-		(vector.x2-vector.x1)*(vector.x2-vector.x1) +
-			(vector.y2-vector.y1)*(vector.y2-vector.y1),
-	)
+	var dashVector = Vector{float64(x1), float64(x2), float64(y1), float64(y2)}
+	var dashVectorLength = math.Sqrt((dashVector.x2-dashVector.x1)*(dashVector.x2-dashVector.x1) + (dashVector.y2-dashVector.y1)*(dashVector.y2-dashVector.y1))
+	var maxX = (dashVector.x2 - dashVector.x1) / dashVectorLength * maxDashDistance
+	var maxY = (dashVector.y2 - dashVector.y1) / dashVectorLength * maxDashDistance
 
-	var maxX = (vector.x2 - vector.x1) / length * maxDashDistance
-	var maxY = (vector.y2 - vector.y1) / length * maxDashDistance
-
-	maxEuclideanDistance := math.Sqrt(maxDashDistance*maxDashDistance + maxDashDistance*maxDashDistance)
-
-	if length < maxEuclideanDistance {
-		g.camera.x = -(vector.x2 - vector.x1)
-		g.camera.y = -(vector.y2 - vector.y1)
+	if dashVectorLength < maxDashDistance {
+		g.character.x += dashVector.x2 - dashVector.x1
+		g.character.y += dashVector.y2 - dashVector.y1
 	} else {
-		g.camera.x = -maxX
-		g.camera.y = -maxY
+		g.character.x += maxX
+		g.character.y += maxY
 	}
 
-	time.AfterFunc(500*time.Millisecond, func() {
-		g.character.dashing = false
-	})
-
+	startDashTimer(g)
 }
 
-func attack(g *Game) {}
+//TODO this would be fun.
+func attack(g *Game) { fmt.Println("Ouch! You attacked but there is no attack implemented!") }
 
-func moveLeft(g *Game) {
-	g.character.hSpeed = -1
-	g.camera.x += g.character.hSpeed
+/*
+DRAWING FUNCTIONS ------------------------------------------------------------------------------------------------------
+*/
+
+func (g *Game) Draw(screen *ebiten.Image) {
+	g.drawGroundImage(screen, groundImage, tileImage)
+	g.drawCharacterImage(screen, characterImage)
 }
 
-func moveRight(g *Game) {
-	g.character.hSpeed = 1
-	g.camera.x += g.character.hSpeed
+func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.Image) {
+	opts := &ebiten.DrawImageOptions{}
+
+	opts.GeoM.Translate(-float64(frameHeight)/2, -float64(frameHeight)/2) //translate image to center of bounding box
+	opts.GeoM.Scale(getDirection(g.character), 1)                         //scale x by -1 when moving left, 1 when right
+	opts.GeoM.Translate(screenWidth/2, screenHeight/2)                    //translate to center of screen
+
+	animationIndex := (g.frameCount / 5) % frameNum
+	spriteX, spriteY := frameOX+animationIndex*frameWidth, frameOY
+	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
+
+	screen.DrawImage(animationFrame, opts)
+	ebitenutil.DebugPrint(screen, strconv.FormatFloat(ebiten.CurrentFPS(), 'f', 1, 64))
 }
 
-func moveDown(g *Game) {
-	g.character.vSpeed = 1
-	g.camera.y += g.character.vSpeed
+func (g *Game) drawGroundImage(screen *ebiten.Image, ground *ebiten.Image, tile *ebiten.Image) {
+	opts := &ebiten.DrawImageOptions{}
+	opts.GeoM.Translate(-g.camera.x, -g.camera.y)
+	g.drawTileImages(tile, ground) //draw tiles here to keep reference to translate above (camera position)
+	screen.DrawImage(ground, opts)
 }
 
-func moveUp(g *Game) {
-	g.character.vSpeed = -1
-	g.camera.y += g.character.vSpeed
+func (g *Game) drawTileImages(tile *ebiten.Image, ground *ebiten.Image) {
+	for x := 0; x < tileRows; x++ {
+		for y := 0; y < tileCols; y++ {
+			tile.Fill(tileColors[playground[x][y]])
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(float64((x)*tileSize), float64((y)*tileSize))
+			ground.DrawImage(tile, op)
+		}
+	}
+}
+
+/*
+UTILITY FUNCTIONS ------------------------------------------------------------------------------------------------------
+*/
+
+func (g *Game) updateCameraPosition() {
+	// do fancy tracking things here
+	g.camera.x = g.character.x
+	g.camera.y = g.character.y
+}
+
+func (g *Game) updateCharacterPosition() {
+	g.character.x += g.character.hSpeed
+	g.character.y += g.character.vSpeed
+}
+
+func (g *Game) reduceSpeedForFriction() {
+	if g.character.hSpeed > 0 {
+		g.character.hSpeed -= frictionCoefficient
+	} else if g.character.hSpeed < 0 {
+		g.character.hSpeed += frictionCoefficient
+	}
+	if g.character.vSpeed > 0 {
+		g.character.vSpeed -= frictionCoefficient
+	} else if g.character.vSpeed < 0 {
+		g.character.vSpeed += frictionCoefficient
+	}
+
+	g.checkIdle()
+}
+
+func (g *Game) checkIdle() {
+	// handles resetting speed back to 0 to prevent twitchy animations with floating point weirdness.
+	const boundary = frictionCoefficient + 0.05
+	if g.character.hSpeed < boundary && g.character.hSpeed > -boundary {
+		g.character.hSpeed = 0
+	}
+	if g.character.vSpeed < boundary && g.character.vSpeed > -boundary {
+		g.character.vSpeed = 0
+	}
+}
+
+func correctTooLowSpeed(g *Game) {
+	if g.character.hSpeed < -(maxSpeed) {
+		g.character.hSpeed = -(maxSpeed)
+	}
+	if g.character.vSpeed < -(maxSpeed) {
+		g.character.vSpeed = -(maxSpeed)
+	}
+}
+
+func correctTooHighSpeed(g *Game) {
+	if g.character.hSpeed > maxSpeed {
+		g.character.hSpeed = maxSpeed
+	}
+	if g.character.vSpeed > maxSpeed {
+		g.character.vSpeed = maxSpeed
+	}
 }
 
 func getDirection(character Character) float64 {
@@ -160,50 +303,16 @@ func getDirection(character Character) float64 {
 	}
 }
 
-func (g *Game) Draw(screen *ebiten.Image) {
-	g.drawGroundImage(screen, groundImage)
-	g.drawCharacterImage(screen, characterImage)
+func startDashTimer(g *Game) *time.Timer {
+	return time.AfterFunc(dashDelay*time.Millisecond, func() {
+		g.character.dashing = false
+	})
 }
 
-func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return screenWidth, screenHeight
-}
-
-func (g *Game) drawGroundImage(screen *ebiten.Image, ground *ebiten.Image) {
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(-g.camera.x, -g.camera.y)
-	screen.DrawImage(ground, op)
-}
-
-func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.Image) {
-	drawOptions := &ebiten.DrawImageOptions{}
-
-	animationIndex := (g.frameCount / 5) % frameNum
-	spriteX, spriteY := frameOX+animationIndex*frameWidth, frameOY
-
-	drawOptions.GeoM.Translate(-float64(frameHeight)/2, -float64(frameHeight)/2) //translate image to center of bounding box
-	drawOptions.GeoM.Scale(getDirection(g.character), 1) //scale x by -1 when moving left, 1 when right
-	drawOptions.GeoM.Translate(screenWidth / 2, screenHeight / 2) //translate to center of screen
-
-	screen.DrawImage(characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image), drawOptions)
-}
-
-func main() {
-	runnerImg, _, err := image.Decode(bytes.NewReader(images.Runner_png))
-	tileImg, _, err := image.Decode(bytes.NewReader(images.Tile_png))
-
-	g := &Game{}
-	g.character.vSpeed = gravityConstant
-
-	if err != nil {
-		log.Fatal(err)
-	}
-	characterImage = ebiten.NewImageFromImage(runnerImg)
-	groundImage = ebiten.NewImageFromImage(tileImg)
-
-	ebiten.SetWindowSize(4 * screenWidth, 4 * screenHeight)
-	ebiten.SetWindowTitle("Fun time")
-	if err := ebiten.RunGame(g); err != nil {
-		log.Fatal(err)
+func setupPlayground() {
+	for i := 0; i < tileRows; i++ {
+		for j := 0; j < tileCols; j++ {
+			playground[i][j] = rand.Intn(3)
+		}
 	}
 }
