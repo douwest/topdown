@@ -21,8 +21,8 @@ import (
 GLOBAL CONSTANTS -------------------------------------------------------------------------------------------------------
 */
 const (
-	screenWidth         = 320
-	screenHeight        = 240
+	screenWidth         = 480
+	screenHeight        = 320
 	frameOX             = 0              //offset x
 	frameOY             = 32             //offset y
 	frameWidth          = 32             //width of char frame
@@ -31,10 +31,10 @@ const (
 	tileSize            = 32             // size wxh in px
 	tileRows            = 16             // number of rows of tiles
 	tileCols            = 16             // number of columns of tiles
-	maxDashDistance     = 1.1 * tileSize //max dash distance in tiles
+	maxDashDistance     = 2.0 * tileSize //max dash distance in tiles
 	frictionCoefficient = 0.25           // reduce speed by this parameter every game-tick
 	maxSpeed            = 2.35           // max movement speed
-	dashDelay           = 550            // dash delay in ms
+	dashDelay           = 450            // dash delay in ms
 )
 
 /*
@@ -68,11 +68,12 @@ type Camera struct {
 }
 
 type Character struct {
-	x       float64
-	y       float64
-	vSpeed  float64
-	hSpeed  float64
-	dashing bool
+	x              float64
+	y              float64
+	vSpeed         float64
+	hSpeed         float64
+	dashing        bool
+	mouseDirection float64
 }
 
 type Vector struct {
@@ -119,7 +120,6 @@ LOGICAL GAME LOOP --------------------------------------------------------------
 */
 func (g *Game) Update() error {
 	g.frameCount++
-	fmt.Println(g.character.hSpeed, g.character.vSpeed)
 
 	if ebiten.IsKeyPressed(ebiten.KeyA) {
 		moveLeft(g)
@@ -151,44 +151,56 @@ func (g *Game) Update() error {
 CHARACTER ACTIONS FUNCTIONS --------------------------------------------------------------------------------------------
 */
 func moveLeft(g *Game) {
-	g.character.hSpeed -= 1
-	correctTooLowSpeed(g)
+	if !g.character.dashing {
+		g.character.hSpeed -= 1
+		correctTooLowSpeed(g)
+	}
 }
 
 func moveRight(g *Game) {
-	g.character.hSpeed += 1
-	correctTooHighSpeed(g)
+	if !g.character.dashing {
+		g.character.hSpeed += 1
+		correctTooHighSpeed(g)
+	}
 }
 
 func moveDown(g *Game) {
-	g.character.vSpeed += 1
-	correctTooHighSpeed(g)
+	if !g.character.dashing {
+		g.character.vSpeed += 1
+		correctTooHighSpeed(g)
+	}
+
 }
 
 func moveUp(g *Game) {
-	g.character.vSpeed -= 1
-	correctTooLowSpeed(g)
+	if !g.character.dashing {
+		g.character.vSpeed -= 1
+		correctTooLowSpeed(g)
+	}
+
 }
 
 func dash(g *Game) {
 	g.character.dashing = true
 
-	var x1, y1 = screenWidth / 2, screenHeight / 2
-	var x2, y2 = ebiten.CursorPosition()
-	var dashVector = Vector{float64(x1), float64(x2), float64(y1), float64(y2)}
-	var dashVectorLength = math.Sqrt((dashVector.x2-dashVector.x1)*(dashVector.x2-dashVector.x1) + (dashVector.y2-dashVector.y1)*(dashVector.y2-dashVector.y1))
-	var maxX = (dashVector.x2 - dashVector.x1) / dashVectorLength * maxDashDistance
-	var maxY = (dashVector.y2 - dashVector.y1) / dashVectorLength * maxDashDistance
+	time.AfterFunc((dashDelay/6)*time.Millisecond, func() {
+		var x1, y1 = screenWidth / 2, screenHeight / 2
+		var x2, y2 = ebiten.CursorPosition()
+		var dashVector = Vector{float64(x1), float64(x2), float64(y1), float64(y2)}
+		var dashVectorLength = math.Sqrt((dashVector.x2-dashVector.x1)*(dashVector.x2-dashVector.x1) + (dashVector.y2-dashVector.y1)*(dashVector.y2-dashVector.y1))
+		var maxX = (dashVector.x2 - dashVector.x1) / dashVectorLength * maxDashDistance
+		var maxY = (dashVector.y2 - dashVector.y1) / dashVectorLength * maxDashDistance
 
-	if dashVectorLength < maxDashDistance {
-		g.character.x += dashVector.x2 - dashVector.x1
-		g.character.y += dashVector.y2 - dashVector.y1
-	} else {
-		g.character.x += maxX
-		g.character.y += maxY
-	}
+		if dashVectorLength < maxDashDistance {
+			g.character.hSpeed += (dashVector.x2 - dashVector.x1) / 8
+			g.character.vSpeed += (dashVector.y2 - dashVector.y1) / 8
+		} else {
+			g.character.hSpeed += maxX / 8
+			g.character.vSpeed += maxY / 8
+		}
 
-	startDashTimer(g)
+		startDashTimer(g)
+	})
 }
 
 //TODO this would be fun.
@@ -205,17 +217,30 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.Image) {
 	opts := &ebiten.DrawImageOptions{}
-
 	opts.GeoM.Translate(-float64(frameHeight)/2, -float64(frameHeight)/2) //translate image to center of bounding box
-	opts.GeoM.Scale(getDirection(g.character), 1)                         //scale x by -1 when moving left, 1 when right
+	opts.GeoM.Scale(getDirection(g), 1)                                   //scale x by -1 when moving left, 1 when right
 	opts.GeoM.Translate(screenWidth/2, screenHeight/2)                    //translate to center of screen
 
 	animationIndex := (g.frameCount / 5) % frameNum
 	spriteX, spriteY := frameOX+animationIndex*frameWidth, frameOY
-	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
 
+	if g.character.hSpeed == 0 && g.character.vSpeed == 0 {
+		spriteX, spriteY = 32, 0
+	}
+
+	if g.character.dashing {
+		spriteX, spriteY = 64, 64
+	}
+
+	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
 	screen.DrawImage(animationFrame, opts)
-	ebitenutil.DebugPrint(screen, strconv.FormatFloat(ebiten.CurrentFPS(), 'f', 1, 64))
+	ebitenutil.DebugPrint(screen, "x0, y0, x1, y1: ("+
+		strconv.Itoa(spriteX)+", "+ // 0 - 224 start x
+		strconv.Itoa(spriteY)+", "+ // always 32 start y
+		strconv.Itoa(spriteX+frameWidth)+", "+ // 32 - 256 end x
+		strconv.Itoa(spriteY+frameHeight)+"), a: "+ // always 64 end y
+		strconv.Itoa(animationIndex)+ // always 64 end y
+		"  , FPS:"+strconv.FormatFloat(ebiten.CurrentFPS(), 'f', 1, 64))
 }
 
 func (g *Game) drawGroundImage(screen *ebiten.Image, ground *ebiten.Image, tile *ebiten.Image) {
@@ -277,6 +302,16 @@ func (g *Game) checkIdle() {
 	}
 }
 
+func (g *Game) getCursorDirectionRelativeToCharacter() float64 {
+	x0, _ := ebiten.CursorPosition()
+	x1 := screenWidth / 2
+	if x0 > x1 {
+		return 1
+	} else {
+		return -1
+	}
+}
+
 func correctTooLowSpeed(g *Game) {
 	if g.character.hSpeed < -(maxSpeed) {
 		g.character.hSpeed = -(maxSpeed)
@@ -295,11 +330,13 @@ func correctTooHighSpeed(g *Game) {
 	}
 }
 
-func getDirection(character Character) float64 {
-	if character.hSpeed > 0 {
+func getDirection(g *Game) float64 {
+	if g.character.hSpeed > 0 {
 		return 1
-	} else {
+	} else if g.character.hSpeed < 0 {
 		return -1
+	} else {
+		return g.getCursorDirectionRelativeToCharacter()
 	}
 }
 
