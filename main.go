@@ -34,7 +34,7 @@ const (
 	maxDashDistance     = 2.0 * tileSize //max dash distance in tiles
 	frictionCoefficient = 0.25           // reduce speed by this parameter every game-tick
 	maxSpeed            = 2.35           // max movement speed
-	dashDelay           = 450            // dash delay in ms
+	dashDelay           = 250            // dash delay in ms
 )
 
 /*
@@ -192,11 +192,11 @@ func dash(g *Game) {
 		var maxY = (dashVector.y2 - dashVector.y1) / dashVectorLength * maxDashDistance
 
 		if dashVectorLength < maxDashDistance {
-			g.character.hSpeed += (dashVector.x2 - dashVector.x1) / 8
-			g.character.vSpeed += (dashVector.y2 - dashVector.y1) / 8
+			g.character.hSpeed += (dashVector.x2 - dashVector.x1) / 6
+			g.character.vSpeed += (dashVector.y2 - dashVector.y1) / 6
 		} else {
-			g.character.hSpeed += maxX / 8
-			g.character.vSpeed += maxY / 8
+			g.character.hSpeed += maxX / 6
+			g.character.vSpeed += maxY / 6
 		}
 
 		startDashTimer(g)
@@ -218,7 +218,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.Image) {
 	opts := &ebiten.DrawImageOptions{}
 	opts.GeoM.Translate(-float64(frameHeight)/2, -float64(frameHeight)/2) //translate image to center of bounding box
-	opts.GeoM.Scale(getDirection(g), 1)                                   //scale x by -1 when moving left, 1 when right
+	opts.GeoM.Scale(getDirection(g), 1)                                   //scale x by relative mouse cursor position (-1 left of char, 1 right of char)
 	opts.GeoM.Translate(screenWidth/2, screenHeight/2)                    //translate to center of screen
 
 	animationIndex := (g.frameCount / 5) % frameNum
@@ -266,7 +266,7 @@ UTILITY FUNCTIONS --------------------------------------------------------------
 */
 
 func (g *Game) updateCameraPosition() {
-	// do fancy tracking things here
+	// do camera tracking logic here
 	g.camera.x = g.character.x
 	g.camera.y = g.character.y
 }
@@ -277,18 +277,20 @@ func (g *Game) updateCharacterPosition() {
 }
 
 func (g *Game) reduceSpeedForFriction() {
-	if g.character.hSpeed > 0 {
-		g.character.hSpeed -= frictionCoefficient
-	} else if g.character.hSpeed < 0 {
-		g.character.hSpeed += frictionCoefficient
-	}
-	if g.character.vSpeed > 0 {
-		g.character.vSpeed -= frictionCoefficient
-	} else if g.character.vSpeed < 0 {
-		g.character.vSpeed += frictionCoefficient
-	}
+	if !g.character.dashing {
+		if g.character.hSpeed > 0 {
+			g.character.hSpeed -= frictionCoefficient
+		} else if g.character.hSpeed < 0 {
+			g.character.hSpeed += frictionCoefficient
+		}
+		if g.character.vSpeed > 0 {
+			g.character.vSpeed -= frictionCoefficient
+		} else if g.character.vSpeed < 0 {
+			g.character.vSpeed += frictionCoefficient
+		}
 
-	g.checkIdle()
+		g.checkIdle()
+	}
 }
 
 func (g *Game) checkIdle() {
@@ -343,6 +345,8 @@ func getDirection(g *Game) float64 {
 func startDashTimer(g *Game) *time.Timer {
 	return time.AfterFunc(dashDelay*time.Millisecond, func() {
 		g.character.dashing = false
+		g.character.hSpeed = 0
+		g.character.vSpeed = 0
 	})
 }
 
