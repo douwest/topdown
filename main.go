@@ -101,7 +101,7 @@ func main() {
 
 func setupGame() *Game {
 	var err error
-	characterImage, _, err = ebitenutil.NewImageFromFile("C:\\Users\\douwe\\go\\src\\github.com\\hajimehoshi\\ebiten\\examples\\resources\\images\\runner.png")
+	characterImage, _, err = ebitenutil.NewImageFromFile("runner.png")
 
 	if err != nil {
 		log.Fatal(err)
