@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
-	"fmt"
 	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
-	"github.com/hajimehoshi/ebiten/examples/resources/images"
 	"image"
 	"image/color"
 	_ "image/color"
@@ -35,6 +32,7 @@ const (
 	frictionCoefficient = 0.25           // reduce speed by this parameter every game-tick
 	maxSpeed            = 2.35           // max movement speed
 	dashDelay           = 250            // dash delay in ms
+	anticipationDelay   = (dashDelay / 6) * time.Millisecond
 )
 
 /*
@@ -72,8 +70,11 @@ type Character struct {
 	y              float64
 	vSpeed         float64
 	hSpeed         float64
-	dashing        bool
 	mouseDirection float64
+	attacking      bool
+	attackIndex    int
+	dashing        bool
+	canDash        bool
 }
 
 type Vector struct {
@@ -99,16 +100,18 @@ func main() {
 }
 
 func setupGame() *Game {
-	runnerImg, _, err := image.Decode(bytes.NewReader(images.Runner_png))
+	var err error
+	characterImage, _, err = ebitenutil.NewImageFromFile("C:\\Users\\douwe\\go\\src\\github.com\\hajimehoshi\\ebiten\\examples\\resources\\images\\runner.png")
 
 	if err != nil {
 		log.Fatal(err)
 	}
-	characterImage = ebiten.NewImageFromImage(runnerImg)
+
 	groundImage = ebiten.NewImage(tileSize*tileRows, tileSize*tileCols)
 	tileImage = ebiten.NewImage(tileSize, tileSize)
-
-	return &Game{}
+	g := &Game{}
+	g.character.canDash = true
+	return g
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
@@ -133,10 +136,10 @@ func (g *Game) Update() error {
 	if ebiten.IsKeyPressed(ebiten.KeyS) {
 		moveDown(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeySpace) && !g.character.dashing {
+	if ebiten.IsKeyPressed(ebiten.KeySpace) && g.character.canDash {
 		dash(g)
 	}
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.character.attacking {
 		attack(g)
 	}
 
@@ -181,30 +184,57 @@ func moveUp(g *Game) {
 }
 
 func dash(g *Game) {
-	g.character.dashing = true
+	g.character.canDash = false
 
-	time.AfterFunc((dashDelay/6)*time.Millisecond, func() {
+	time.AfterFunc(anticipationDelay, func() {
 		var x1, y1 = screenWidth / 2, screenHeight / 2
 		var x2, y2 = ebiten.CursorPosition()
 		var dashVector = Vector{float64(x1), float64(x2), float64(y1), float64(y2)}
-		var dashVectorLength = math.Sqrt((dashVector.x2-dashVector.x1)*(dashVector.x2-dashVector.x1) + (dashVector.y2-dashVector.y1)*(dashVector.y2-dashVector.y1))
-		var maxX = (dashVector.x2 - dashVector.x1) / dashVectorLength * maxDashDistance
-		var maxY = (dashVector.y2 - dashVector.y1) / dashVectorLength * maxDashDistance
+		var dx, dy = dashVector.x2 - dashVector.x1, dashVector.y2 - dashVector.y1
+
+		var dashVectorLength = math.Sqrt(dx*dx + dy*dy)
+		var maxX = dx / dashVectorLength * maxDashDistance
+		var maxY = dy / dashVectorLength * maxDashDistance
+
+		g.character.dashing = true
 
 		if dashVectorLength < maxDashDistance {
-			g.character.hSpeed += (dashVector.x2 - dashVector.x1) / 6
-			g.character.vSpeed += (dashVector.y2 - dashVector.y1) / 6
+			g.character.hSpeed += dx / 7
+			g.character.vSpeed += dy / 7
 		} else {
-			g.character.hSpeed += maxX / 6
-			g.character.vSpeed += maxY / 6
+			g.character.hSpeed += maxX / 7
+			g.character.vSpeed += maxY / 7
 		}
 
-		startDashTimer(g)
+		startDashMovement(g)
 	})
 }
 
-//TODO this would be fun.
-func attack(g *Game) { fmt.Println("Ouch! You attacked but there is no attack implemented!") }
+//TODO if g.character.attackIndex was not incremented for x seconds, reset to 0
+func attack(g *Game) {
+	g.character.attacking = true
+	if g.character.attackIndex > 96 {
+		g.character.attackIndex = 0
+	}
+	startComboTimer(g)
+	startAttackTimer(g)
+}
+
+func startComboTimer(g *Game) *time.Timer {
+	var currentIndex = g.character.attackIndex
+	return time.AfterFunc(1000*time.Millisecond, func() {
+		if g.character.attackIndex <= currentIndex {
+			g.character.attackIndex = 0
+		}
+	})
+}
+
+func startAttackTimer(g *Game) *time.Timer {
+	return time.AfterFunc(400*time.Millisecond, func() {
+		g.character.attacking = false
+		g.character.attackIndex += 32
+	})
+}
 
 /*
 DRAWING FUNCTIONS ------------------------------------------------------------------------------------------------------
@@ -229,7 +259,11 @@ func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.I
 	}
 
 	if g.character.dashing {
-		spriteX, spriteY = 64, 64
+		spriteX, spriteY = 128, 64
+	}
+
+	if g.character.attacking {
+		spriteX, spriteY = g.character.attackIndex, 64
 	}
 
 	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
@@ -342,11 +376,14 @@ func getDirection(g *Game) float64 {
 	}
 }
 
-func startDashTimer(g *Game) *time.Timer {
+func startDashMovement(g *Game) *time.Timer {
 	return time.AfterFunc(dashDelay*time.Millisecond, func() {
 		g.character.dashing = false
 		g.character.hSpeed = 0
 		g.character.vSpeed = 0
+		time.AfterFunc(dashDelay*time.Millisecond, func() {
+			g.character.canDash = true
+		})
 	})
 }
 
