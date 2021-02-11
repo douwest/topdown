@@ -26,19 +26,21 @@ const (
 	frameHeight         = 32             //height of char frame
 	frameNum            = 8              //number of frames in animation cycle
 	tileSize            = 32             // size wxh in px
-	tileRows            = 16             // number of rows of tiles
-	tileCols            = 16             // number of columns of tiles
+	tileRows            = 32             // number of rows of tiles
+	tileCols            = 32             // number of columns of tiles
 	maxDashDistance     = 2.0 * tileSize //max dash distance in tiles
-	frictionCoefficient = 0.25           // reduce speed by this parameter every game-tick
-	maxSpeed            = 2.35           // max movement speed
+	frictionCoefficient = 0.15           // reduce speed by this parameter every game-tick
 	dashDelay           = 250            // dash delay in ms
 	anticipationDelay   = (dashDelay / 6) * time.Millisecond
+	walkSpeed           = 2.35
+	sprintSpeed         = 3.6
 )
 
 /*
 GLOBAL VARIABLES -------------------------------------------------------------------------------------------------------
 */
 var (
+	maxSpeed       = 2.35 // max movement speed
 	characterImage *ebiten.Image
 	groundImage    *ebiten.Image
 	tileImage      *ebiten.Image
@@ -47,6 +49,7 @@ var (
 		{0x5d, 0x74, 0x99, 0xff},
 		{0x2b, 0x42, 0x66, 0xff},
 		{0x42, 0x5a, 0x80, 0xff},
+		{0x13, 0x34, 0x45, 0xff},
 	}
 	playground [tileRows][tileCols]int
 )
@@ -75,6 +78,11 @@ type Character struct {
 	attackIndex    int
 	dashing        bool
 	canDash        bool
+	vCollision     bool
+	hCollision     bool
+	currentTileX   int
+	currentTileY   int
+	sprinting      bool
 }
 
 type Vector struct {
@@ -124,6 +132,22 @@ LOGICAL GAME LOOP --------------------------------------------------------------
 func (g *Game) Update() error {
 	g.frameCount++
 
+	if g.character.vCollision {
+		g.character.vSpeed = 0
+	}
+
+	if g.character.hCollision {
+		g.character.hSpeed = 0
+	}
+
+	if ebiten.IsKeyPressed(ebiten.KeyShift) {
+		maxSpeed = sprintSpeed
+		g.character.sprinting = true
+	} else {
+		maxSpeed = walkSpeed
+		g.character.sprinting = false
+	}
+
 	if ebiten.IsKeyPressed(ebiten.KeyA) {
 		moveLeft(g)
 	}
@@ -148,6 +172,10 @@ func (g *Game) Update() error {
 	g.updateCameraPosition()
 
 	return nil
+}
+
+func (g *Game) hasVcollision() bool {
+	return playground[g.character.currentTileY+1][g.character.currentTileX] == 4 || playground[g.character.currentTileY-1][g.character.currentTileX] == 4
 }
 
 /*
@@ -251,7 +279,13 @@ func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.I
 	opts.GeoM.Scale(getDirection(g), 1)                                   //scale x by relative mouse cursor position (-1 left of char, 1 right of char)
 	opts.GeoM.Translate(screenWidth/2, screenHeight/2)                    //translate to center of screen
 
-	animationIndex := (g.frameCount / 5) % frameNum
+	var animationSpeed = 5
+
+	if g.character.sprinting {
+		animationSpeed = 3
+	}
+
+	animationIndex := (g.frameCount / animationSpeed) % frameNum
 	spriteX, spriteY := frameOX+animationIndex*frameWidth, frameOY
 
 	if g.character.hSpeed == 0 && g.character.vSpeed == 0 {
@@ -268,13 +302,7 @@ func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.I
 
 	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
 	screen.DrawImage(animationFrame, opts)
-	ebitenutil.DebugPrint(screen, "x0, y0, x1, y1: ("+
-		strconv.Itoa(spriteX)+", "+ // 0 - 224 start x
-		strconv.Itoa(spriteY)+", "+ // always 32 start y
-		strconv.Itoa(spriteX+frameWidth)+", "+ // 32 - 256 end x
-		strconv.Itoa(spriteY+frameHeight)+"), a: "+ // always 64 end y
-		strconv.Itoa(animationIndex)+ // always 64 end y
-		"  , FPS:"+strconv.FormatFloat(ebiten.CurrentFPS(), 'f', 1, 64))
+	ebitenutil.DebugPrint(screen, "currentTile (x, y) : "+strconv.Itoa(g.character.currentTileX)+", "+strconv.Itoa(g.character.currentTileY)+")")
 }
 
 func (g *Game) drawGroundImage(screen *ebiten.Image, ground *ebiten.Image, tile *ebiten.Image) {
@@ -291,6 +319,14 @@ func (g *Game) drawTileImages(tile *ebiten.Image, ground *ebiten.Image) {
 			op := &ebiten.DrawImageOptions{}
 			op.GeoM.Translate(float64((x)*tileSize), float64((y)*tileSize))
 			ground.DrawImage(tile, op)
+
+			if g.character.x >= float64(x)*tileSize && g.character.x < float64(x)*tileSize+tileSize {
+				g.character.currentTileX = x
+			}
+			if g.character.y >= float64(y)*tileSize && g.character.y < float64(y)*tileSize+tileSize {
+				g.character.currentTileY = y
+			}
+
 		}
 	}
 }
@@ -390,7 +426,11 @@ func startDashMovement(g *Game) *time.Timer {
 func setupPlayground() {
 	for i := 0; i < tileRows; i++ {
 		for j := 0; j < tileCols; j++ {
-			playground[i][j] = rand.Intn(3)
+			if i == 0 || i == tileRows-1 || j == 0 || j == tileCols-1 {
+				playground[i][j] = 4
+			} else {
+				playground[i][j] = rand.Intn(3)
+			}
 		}
 	}
 }
