@@ -19,29 +19,33 @@ import (
 GLOBAL CONSTANTS -------------------------------------------------------------------------------------------------------
 */
 const (
-	screenWidth         = 480
-	screenHeight        = 320
-	frameOX             = 0              //offset x
-	frameOY             = 32             //offset y
-	frameWidth          = 32             //width of char frame
-	frameHeight         = 32             //height of char frame
-	frameNum            = 8              //number of frames in animation cycle
-	tileSize            = 32             // size wxh in px
-	tileRows            = 32             // number of rows of tiles
-	tileCols            = 32             // number of columns of tiles
-	maxDashDistance     = 2.0 * tileSize //max dash distance in tiles
-	frictionCoefficient = 0.15           // reduce speed by this parameter every game-tick
-	dashDelay           = 250            // dash delay in ms
-	anticipationDelay   = (dashDelay / 6) * time.Millisecond
-	walkSpeed           = 2.35
-	sprintSpeed         = 3.6
+	screenWidth          = 480
+	screenHeight         = 320
+	frameOX              = 0              //offset x
+	frameOY              = 32             //offset y
+	frameWidth           = 32             //width of char frame
+	frameHeight          = 32             //height of char frame
+	frameNum             =  8              //number of frames in animation cycle
+	tileSize             = 16             // size wxh in px
+	tileRows             = 16             // number of rows of tiles
+	tileCols             = 16             // number of columns of tiles
+	maxDashDistance      = 2.0 * tileSize //max dash distance in tiles
+	frictionCoefficient  = 0.15           // reduce speed by this parameter every game-tick
+	dashDelay            = 250            // dash delay in ms
+	anticipationDelay    = (dashDelay / 6) * time.Millisecond
+	walkSpeed            = 2.35
+	walkAnimationSpeed   = 5
+	speedIncrease        = 1
+	sprintSpeed          = 3.6
+	sprintAnimationSpeed = 3
+	dashSpeedModifier    = 7
 )
 
 /*
 GLOBAL VARIABLES -------------------------------------------------------------------------------------------------------
 */
 var (
-	maxSpeed       = 2.35 // max movement speed
+	maxSpeed       = walkSpeed // max movement speed
 	characterImage *ebiten.Image
 	groundImage    *ebiten.Image
 	tileImage      *ebiten.Image
@@ -70,24 +74,32 @@ type Camera struct {
 }
 
 type Character struct {
-	x              float64
-	y              float64
-	vSpeed         float64
-	hSpeed         float64
+	location       Location
+	speed          Speed
 	mouseDirection float64
 	attacking      bool
 	attackIndex    int
 	dashing        bool
 	canDash        bool
 	sprinting      bool
-	VUCollision    bool
-	VDCollision    bool
-	HRCollision    bool
-	HLCollision    bool
+	collision      Collision
 }
 
-func (c Character) hasCollision() bool {
-	return c.HLCollision || c.VUCollision || c.VDCollision || c.HRCollision
+type Location struct {
+	x              float64
+	y              float64
+}
+
+type Speed struct {
+	vertical        float64
+	horizontal      float64
+}
+
+type Collision struct {
+	verticalUp      bool
+	verticalDown    bool
+	horizontalLeft  bool
+	horizontalRight bool
 }
 
 type Vector struct {
@@ -139,25 +151,18 @@ func (g *Game) Update() error {
 
 	g.checkHCollision()
 	g.checkVCollision()
+	g.checkSprinting()
 
-	if ebiten.IsKeyPressed(ebiten.KeyShift) {
-		maxSpeed = sprintSpeed
-		g.character.sprinting = true
-	} else {
-		maxSpeed = walkSpeed
-		g.character.sprinting = false
-	}
-
-	if ebiten.IsKeyPressed(ebiten.KeyA) && !g.character.HLCollision {
+	if (ebiten.IsKeyPressed(ebiten.KeyA) || ebiten.IsKeyPressed(ebiten.KeyLeft)) && !g.character.collision.horizontalLeft {
 		moveLeft(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyD) && !g.character.HRCollision {
+	if (ebiten.IsKeyPressed(ebiten.KeyD) || ebiten.IsKeyPressed(ebiten.KeyRight)) && !g.character.collision.horizontalRight {
 		moveRight(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyW) && !g.character.VUCollision {
+	if (ebiten.IsKeyPressed(ebiten.KeyW) || ebiten.IsKeyPressed(ebiten.KeyUp)) && !g.character.collision.verticalUp {
 		moveUp(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyS) && !g.character.VDCollision {
+	if (ebiten.IsKeyPressed(ebiten.KeyS) || ebiten.IsKeyPressed(ebiten.KeyDown)) && !g.character.collision.verticalDown {
 		moveDown(g)
 	}
 	if ebiten.IsKeyPressed(ebiten.KeySpace) && g.character.canDash && !g.character.hasCollision() {
@@ -166,7 +171,8 @@ func (g *Game) Update() error {
 	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.character.attacking {
 		attack(g)
 	}
-	if g.character.sprinting && g.character.hasCollision() {
+	if g.character.sprinting && g.character.hasCollision() && g.isPressingDirectionalKeys() {
+		attack(g)
 		fmt.Println("OUCH!")
 	}
 
@@ -178,32 +184,54 @@ func (g *Game) Update() error {
 }
 
 func (g *Game) checkHCollision() {
-	if g.character.x-frameWidth/2 <= 0-screenWidth/2 {
-		g.character.HLCollision = true
-	} else if g.character.x+frameWidth/2 >= tileCols*tileSize-screenWidth/2 {
-		g.character.HRCollision = true
+	if g.character.location.x-frameWidth/2 <= 0-screenWidth/2 {
+		g.character.collision.horizontalLeft = true
+	} else if g.character.location.x+frameWidth/2 >= tileCols*tileSize-screenWidth/2 {
+		g.character.collision.horizontalRight = true
 	} else {
-		g.character.HLCollision = false
-		g.character.HRCollision = false
+		g.character.collision.horizontalLeft = false
+		g.character.collision.horizontalRight = false
 	}
-	if g.character.HRCollision || g.character.HLCollision {
-		g.character.hSpeed = 0
+	if g.character.collision.horizontalRight || g.character.collision.horizontalLeft {
+		g.character.speed.horizontal = 0
 	}
 
 }
 
 func (g *Game) checkVCollision() {
-	if g.character.y-frameHeight/2 <= 0-screenHeight/2 {
-		g.character.VUCollision = true
-	} else if g.character.y+frameHeight/2 >= tileRows*tileSize-screenHeight/2 {
-		g.character.VDCollision = true
+	if g.character.location.y-frameHeight/2 <= 0-screenHeight/2 {
+		g.character.collision.verticalUp = true
+	} else if g.character.location.y+frameHeight/2 >= tileRows*tileSize-screenHeight/2 {
+		g.character.collision.verticalDown = true
 	} else {
-		g.character.VUCollision = false
-		g.character.VDCollision = false
+		g.character.collision.verticalUp = false
+		g.character.collision.verticalDown = false
 	}
-	if g.character.VUCollision || g.character.VDCollision {
-		g.character.vSpeed = 0
+	if g.character.collision.verticalUp || g.character.collision.verticalDown {
+		g.character.speed.vertical = 0
 	}
+}
+
+func (c Character) hasCollision() bool {
+	return c.collision.horizontalLeft || c.collision.verticalUp || c.collision.verticalDown || c.collision.horizontalRight
+}
+
+func (c Character) isColliding() bool {
+	return true
+}
+
+func (g *Game) checkSprinting()  {
+	if ebiten.IsKeyPressed(ebiten.KeyShift) {
+		maxSpeed = sprintSpeed
+		g.character.sprinting = true
+	} else {
+		maxSpeed = walkSpeed
+		g.character.sprinting = false
+	}
+}
+
+func (g *Game) isPressingDirectionalKeys() bool {
+	return ebiten.IsKeyPressed(ebiten.KeyA) || ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyW) || ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyD) || ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyS) || ebiten.IsKeyPressed(ebiten.KeyDown)
 }
 
 /*
@@ -211,21 +239,21 @@ CHARACTER ACTIONS FUNCTIONS ----------------------------------------------------
 */
 func moveLeft(g *Game) {
 	if !g.character.dashing {
-		g.character.hSpeed -= 1
+		g.character.speed.horizontal -= speedIncrease
 		correctTooLowSpeed(g)
 	}
 }
 
 func moveRight(g *Game) {
 	if !g.character.dashing {
-		g.character.hSpeed += 1
+		g.character.speed.horizontal += speedIncrease
 		correctTooHighSpeed(g)
 	}
 }
 
 func moveDown(g *Game) {
 	if !g.character.dashing {
-		g.character.vSpeed += 1
+		g.character.speed.vertical += speedIncrease
 		correctTooHighSpeed(g)
 	}
 
@@ -233,7 +261,7 @@ func moveDown(g *Game) {
 
 func moveUp(g *Game) {
 	if !g.character.dashing {
-		g.character.vSpeed -= 1
+		g.character.speed.vertical -= speedIncrease
 		correctTooLowSpeed(g)
 	}
 
@@ -255,11 +283,11 @@ func dash(g *Game) {
 		g.character.dashing = true
 
 		if dashVectorLength < maxDashDistance {
-			g.character.hSpeed += dx / 7
-			g.character.vSpeed += dy / 7
+			g.character.speed.horizontal += dx / dashSpeedModifier
+			g.character.speed.vertical += dy / dashSpeedModifier
 		} else {
-			g.character.hSpeed += maxX / 7
-			g.character.vSpeed += maxY / 7
+			g.character.speed.horizontal += maxX / dashSpeedModifier
+			g.character.speed.vertical += maxY / dashSpeedModifier
 		}
 
 		startDashMovement(g)
@@ -297,6 +325,7 @@ DRAWING FUNCTIONS --------------------------------------------------------------
 */
 
 func (g *Game) Draw(screen *ebiten.Image) {
+	ebitenutil.DebugPrint(screen, strconv.Itoa(int(ebiten.CurrentFPS())))
 	g.drawGroundImage(screen, groundImage, tileImage)
 	g.drawCharacterImage(screen, characterImage)
 }
@@ -307,16 +336,16 @@ func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.I
 	opts.GeoM.Scale(getDirection(g), 1)                                   //scale x by relative mouse cursor position (-1 left of char, 1 right of char)
 	opts.GeoM.Translate(screenWidth/2, screenHeight/2)                    //translate to center of screen
 
-	var animationSpeed = 5
+	var animationSpeed = walkAnimationSpeed
 
 	if g.character.sprinting {
-		animationSpeed = 3
+		animationSpeed = sprintAnimationSpeed
 	}
 
 	animationIndex := (g.frameCount / animationSpeed) % frameNum
 	spriteX, spriteY := frameOX+animationIndex*frameWidth, frameOY
 
-	if g.character.hSpeed == 0 && g.character.vSpeed == 0 {
+	if g.character.speed.horizontal == 0 && g.character.speed.vertical == 0 {
 		spriteX, spriteY = 32, 0
 	}
 
@@ -330,7 +359,7 @@ func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.I
 
 	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
 	screen.DrawImage(animationFrame, opts)
-	ebitenutil.DebugPrint(screen, "character (x, y) : "+strconv.FormatFloat(g.character.x, 'f', '1', 64)+", "+strconv.FormatFloat(g.character.y, 'f', '1', 64)+")")
+	// ebitenutil.DebugPrint(screen, "character (x, y) : "+strconv.FormatFloat(g.character.x, 'f', '1', 64)+", "+strconv.FormatFloat(g.character.y, 'f', '1', 64)+")")
 }
 
 func (g *Game) drawGroundImage(screen *ebiten.Image, ground *ebiten.Image, tile *ebiten.Image) {
@@ -357,26 +386,26 @@ UTILITY FUNCTIONS --------------------------------------------------------------
 
 func (g *Game) updateCameraPosition() {
 	// do camera tracking logic here
-	g.camera.x = g.character.x
-	g.camera.y = g.character.y
+	g.camera.x = g.character.location.x
+	g.camera.y = g.character.location.y
 }
 
 func (g *Game) updateCharacterPosition() {
-	g.character.x += g.character.hSpeed
-	g.character.y += g.character.vSpeed
+	g.character.location.x += g.character.speed.horizontal
+	g.character.location.y += g.character.speed.vertical
 }
 
 func (g *Game) reduceSpeedForFriction() {
 	if !g.character.dashing {
-		if g.character.hSpeed > 0 {
-			g.character.hSpeed -= frictionCoefficient
-		} else if g.character.hSpeed < 0 {
-			g.character.hSpeed += frictionCoefficient
+		if g.character.speed.horizontal > 0 {
+			g.character.speed.horizontal -= frictionCoefficient
+		} else if g.character.speed.horizontal < 0 {
+			g.character.speed.horizontal += frictionCoefficient
 		}
-		if g.character.vSpeed > 0 {
-			g.character.vSpeed -= frictionCoefficient
-		} else if g.character.vSpeed < 0 {
-			g.character.vSpeed += frictionCoefficient
+		if g.character.speed.vertical > 0 {
+			g.character.speed.vertical -= frictionCoefficient
+		} else if g.character.speed.vertical < 0 {
+			g.character.speed.vertical += frictionCoefficient
 		}
 
 		g.checkIdle()
@@ -386,11 +415,11 @@ func (g *Game) reduceSpeedForFriction() {
 func (g *Game) checkIdle() {
 	// handles resetting speed back to 0 to prevent twitchy animations with floating point weirdness.
 	const boundary = frictionCoefficient + 0.05
-	if g.character.hSpeed < boundary && g.character.hSpeed > -boundary {
-		g.character.hSpeed = 0
+	if g.character.speed.horizontal < boundary && g.character.speed.horizontal > -boundary {
+		g.character.speed.horizontal = 0
 	}
-	if g.character.vSpeed < boundary && g.character.vSpeed > -boundary {
-		g.character.vSpeed = 0
+	if g.character.speed.vertical < boundary && g.character.speed.vertical > -boundary {
+		g.character.speed.vertical = 0
 	}
 }
 
@@ -405,27 +434,27 @@ func (g *Game) getCursorDirectionRelativeToCharacter() float64 {
 }
 
 func correctTooLowSpeed(g *Game) {
-	if g.character.hSpeed < -(maxSpeed) {
-		g.character.hSpeed = -(maxSpeed)
+	if g.character.speed.horizontal < -(maxSpeed) {
+		g.character.speed.horizontal = -(maxSpeed)
 	}
-	if g.character.vSpeed < -(maxSpeed) {
-		g.character.vSpeed = -(maxSpeed)
+	if g.character.speed.vertical < -(maxSpeed) {
+		g.character.speed.vertical = -(maxSpeed)
 	}
 }
 
 func correctTooHighSpeed(g *Game) {
-	if g.character.hSpeed > maxSpeed {
-		g.character.hSpeed = maxSpeed
+	if g.character.speed.horizontal > maxSpeed {
+		g.character.speed.horizontal = maxSpeed
 	}
-	if g.character.vSpeed > maxSpeed {
-		g.character.vSpeed = maxSpeed
+	if g.character.speed.vertical > maxSpeed {
+		g.character.speed.vertical = maxSpeed
 	}
 }
 
 func getDirection(g *Game) float64 {
-	if g.character.hSpeed > 0 {
+	if g.character.speed.horizontal > 0 {
 		return 1
-	} else if g.character.hSpeed < 0 {
+	} else if g.character.speed.horizontal < 0 {
 		return -1
 	} else {
 		return g.getCursorDirectionRelativeToCharacter()
@@ -435,8 +464,8 @@ func getDirection(g *Game) float64 {
 func startDashMovement(g *Game) *time.Timer {
 	return time.AfterFunc(dashDelay*time.Millisecond, func() {
 		g.character.dashing = false
-		g.character.hSpeed = 0
-		g.character.vSpeed = 0
+		g.character.speed.horizontal = 0
+		g.character.speed.vertical = 0
 		time.AfterFunc(dashDelay*time.Millisecond, func() {
 			g.character.canDash = true
 		})
