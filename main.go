@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
 	"image"
@@ -78,11 +79,15 @@ type Character struct {
 	attackIndex    int
 	dashing        bool
 	canDash        bool
-	vCollision     bool
-	hCollision     bool
-	currentTileX   int
-	currentTileY   int
 	sprinting      bool
+	VUCollision    bool
+	VDCollision    bool
+	HRCollision    bool
+	HLCollision    bool
+}
+
+func (c Character) hasCollision() bool {
+	return c.HLCollision || c.VUCollision || c.VDCollision || c.HRCollision
 }
 
 type Vector struct {
@@ -132,13 +137,8 @@ LOGICAL GAME LOOP --------------------------------------------------------------
 func (g *Game) Update() error {
 	g.frameCount++
 
-	if g.character.vCollision {
-		g.character.vSpeed = 0
-	}
-
-	if g.character.hCollision {
-		g.character.hSpeed = 0
-	}
+	g.checkHCollision()
+	g.checkVCollision()
 
 	if ebiten.IsKeyPressed(ebiten.KeyShift) {
 		maxSpeed = sprintSpeed
@@ -148,23 +148,26 @@ func (g *Game) Update() error {
 		g.character.sprinting = false
 	}
 
-	if ebiten.IsKeyPressed(ebiten.KeyA) {
+	if ebiten.IsKeyPressed(ebiten.KeyA) && !g.character.HLCollision {
 		moveLeft(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyD) {
+	if ebiten.IsKeyPressed(ebiten.KeyD) && !g.character.HRCollision {
 		moveRight(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyW) {
+	if ebiten.IsKeyPressed(ebiten.KeyW) && !g.character.VUCollision {
 		moveUp(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyS) {
+	if ebiten.IsKeyPressed(ebiten.KeyS) && !g.character.VDCollision {
 		moveDown(g)
 	}
-	if ebiten.IsKeyPressed(ebiten.KeySpace) && g.character.canDash {
+	if ebiten.IsKeyPressed(ebiten.KeySpace) && g.character.canDash && !g.character.hasCollision() {
 		dash(g)
 	}
 	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.character.attacking {
 		attack(g)
+	}
+	if g.character.sprinting && g.character.hasCollision() {
+		fmt.Println("OUCH!")
 	}
 
 	g.updateCharacterPosition()
@@ -174,8 +177,33 @@ func (g *Game) Update() error {
 	return nil
 }
 
-func (g *Game) hasVcollision() bool {
-	return playground[g.character.currentTileY+1][g.character.currentTileX] == 4 || playground[g.character.currentTileY-1][g.character.currentTileX] == 4
+func (g *Game) checkHCollision() {
+	if g.character.x-frameWidth/2 <= 0-screenWidth/2 {
+		g.character.HLCollision = true
+	} else if g.character.x+frameWidth/2 >= tileCols*tileSize-screenWidth/2 {
+		g.character.HRCollision = true
+	} else {
+		g.character.HLCollision = false
+		g.character.HRCollision = false
+	}
+	if g.character.HRCollision || g.character.HLCollision {
+		g.character.hSpeed = 0
+	}
+
+}
+
+func (g *Game) checkVCollision() {
+	if g.character.y-frameHeight/2 <= 0-screenHeight/2 {
+		g.character.VUCollision = true
+	} else if g.character.y+frameHeight/2 >= tileRows*tileSize-screenHeight/2 {
+		g.character.VDCollision = true
+	} else {
+		g.character.VUCollision = false
+		g.character.VDCollision = false
+	}
+	if g.character.VUCollision || g.character.VDCollision {
+		g.character.vSpeed = 0
+	}
 }
 
 /*
@@ -302,7 +330,7 @@ func (g *Game) drawCharacterImage(screen *ebiten.Image, characterImage *ebiten.I
 
 	animationFrame := characterImage.SubImage(image.Rect(spriteX, spriteY, spriteX+frameWidth, spriteY+frameHeight)).(*ebiten.Image)
 	screen.DrawImage(animationFrame, opts)
-	ebitenutil.DebugPrint(screen, "currentTile (x, y) : "+strconv.Itoa(g.character.currentTileX)+", "+strconv.Itoa(g.character.currentTileY)+")")
+	ebitenutil.DebugPrint(screen, "character (x, y) : "+strconv.FormatFloat(g.character.x, 'f', '1', 64)+", "+strconv.FormatFloat(g.character.y, 'f', '1', 64)+")")
 }
 
 func (g *Game) drawGroundImage(screen *ebiten.Image, ground *ebiten.Image, tile *ebiten.Image) {
@@ -319,14 +347,6 @@ func (g *Game) drawTileImages(tile *ebiten.Image, ground *ebiten.Image) {
 			op := &ebiten.DrawImageOptions{}
 			op.GeoM.Translate(float64((x)*tileSize), float64((y)*tileSize))
 			ground.DrawImage(tile, op)
-
-			if g.character.x >= float64(x)*tileSize && g.character.x < float64(x)*tileSize+tileSize {
-				g.character.currentTileX = x
-			}
-			if g.character.y >= float64(y)*tileSize && g.character.y < float64(y)*tileSize+tileSize {
-				g.character.currentTileY = y
-			}
-
 		}
 	}
 }
